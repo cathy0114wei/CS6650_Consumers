@@ -11,63 +11,113 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.DeliverCallback;
+import conn.RMQChannelFactory;
+import conn.RMQChannelPool;
 import dto.*;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import software.amazon.awssdk.auth.credentials.SystemPropertyCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
+import controller.*;
+
+
 import static constants.Constants.*;
+import static constants.Constants.CHANNEL_POOL_CAPACITY;
 
 public class Consumer {
     private static Logger logger = Logger.getLogger(Consumer.class.getName());
-    int queueNum;
-    ArrayList<String> queueNames;
+    String queueName;
+    DynamoDbClient dynamoDbClient;
+    UserDict dict;
+    RMQChannelFactory rmqChannelFactory;
+    RMQChannelPool rmqChannelPool;
 
     public Consumer(int queueNum) {
-        this.queueNum = queueNum;
-        this.queueNames = new ArrayList<>();
-        for(int i = 0; i < queueNum; i++){
-            queueNames.add(QUEUE_NAME + i);
-        }
+       queueName = QUEUE_NAME + queueNum;
     }
 
-    public static void main(String[] argv) throws Exception {
-        // I don't understand where should I put the users' info, so I just make it stay at cache.
-        UserDict dict = new UserDict();
-        Consumer consumer = new Consumer(QUEUE_NUM);
-        logger.log(Level.INFO, "started");
-        for(String queueName : consumer.queueNames){
-            ConnectionFactory factory = new ConnectionFactory();
-            factory.setHost(HOSTNAME);
-            connectToQueue(queueName, factory, dict);
+    public void init() throws IOException, TimeoutException {
+        dict = new UserDict();
+
+        ConnectionFactory factory = new ConnectionFactory();
+        factory.setHost(HOSTNAME);
+        factory.setUsername(USERNAME);
+        factory.setPassword(PASSWORD);
+
+        try{
+            logger.log(Level.INFO, "trying connect");
+            Connection connection = factory.newConnection();
+            logger.log(Level.INFO, "connect success");
+
+            rmqChannelFactory = new RMQChannelFactory(connection);
+            rmqChannelPool = new RMQChannelPool(CHANNEL_POOL_CAPACITY, rmqChannelFactory);
+
+            Channel channel = rmqChannelPool.borrowObject();
+            channel.basicQos(1);
+            Map<String, Object> arguments = new HashMap<>();
+            arguments.put("x-queue-type", "quorum");
+            channel.queueDeclare(queueName, true, false, false, arguments);
+        } catch (IOException | TimeoutException e) {
+            throw new RuntimeException(e);
         }
     }
-    private static void connectToQueue(String queueName, ConnectionFactory factory, UserDict dict)throws Exception{
-        logger.log(Level.INFO, "trying connect");
-        final Connection connection = factory.newConnection();
-        logger.log(Level.INFO, "connect success");
+    public static void main(String[] argv) throws Exception {
+        Consumer consumer = new Consumer(QUEUE_NUM);
+        consumer.init();
+        consumer.connectToDB();
+
+        logger.log(Level.INFO, "started");
+        consumer.ProcessMsg();
+    }
+    private void connectToDB(){
+        System.setProperty("aws.accessKeyId", accessKeyId);
+        System.setProperty("aws.secretAccessKey", secretAccessKey);
+        System.setProperty("aws.sessionToken", sessionToken);
+        Region region = Region.US_EAST_1;
+        this.dynamoDbClient = DynamoDbClient.builder()
+                .credentialsProvider(SystemPropertyCredentialsProvider.create())
+                .region(region)
+                .build();
+    }
+
+    private void ProcessMsg()throws Exception{
+        DBController dbController = new DBController();
         System.out.println(" [*] Thread waiting for messages. To exit press CTRL+C");
         Runnable runnable = () -> {
             try {
-                final Channel channel = connection.createChannel();
-                channel.queueDeclare(queueName, true, false, false, null);
+                Channel channel = rmqChannelPool.borrowObject();
+//                channel.queueDeclare(queueName, true, false, false, null);
                 // max one message per receiver
-                channel.basicQos(1);
                 DeliverCallback deliverCallback = (consumerTag, delivery) -> {
                     String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
                     channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
                     //TODO: if we should put the gson outside the thread
                     Gson gson = new Gson();
                     Swipe swipe = gson.fromJson(message, Swipe.class);
-                    dict.updateDict(swipe);
+
+                    //AS3: update the SwipeData database
+                    if(swipe.getRightOrNot()){
+                        dbController.putItemInTable(this.dynamoDbClient, DB_ER2EE, "Swiper", swipe.getSwiper().toString(), "Swipee", swipe.getSwipee().toString());
+                        dbController.putItemInTable(this.dynamoDbClient, DB_EE2ER, "Swipee", swipe.getSwipee().toString(), "Swiper", swipe.getSwiper().toString());
+                    } else {
+                        dbController.putItemInTable(this.dynamoDbClient, DB_DIS, "Swiper", swipe.getSwiper().toString(), "Swipee", swipe.getSwipee().toString());
+                    }
+//                    //AS2: store the swipe data into a data structure.
+//                    this.dict.updateDict(swipe);
                     logger.log(Level.INFO, "Callback thread ID = " + Thread.currentThread().getId() + " Received '" + message + "'");
                 };
                 // process messages
                 channel.basicConsume(queueName, false, deliverCallback, consumerTag -> { });
-            } catch (IOException ex) {
+                rmqChannelPool.returnObject(channel);
+            } catch (Exception ex) {
                 logger.log(Level.SEVERE, null, ex);
             }
         };
@@ -76,8 +126,5 @@ public class Consumer {
             Thread recv = new Thread(runnable);
             recv.start();
         }
-//        Thread recv2 = new Thread(runnable);
-//        recv1.start();
-//        recv2.start();
     }
 }

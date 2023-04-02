@@ -59,6 +59,30 @@
       <artifactId>lombok</artifactId>
       <version>1.16.22</version>
     </dependency>
+<!--    &lt;!&ndash; https://mvnrepository.com/artifact/com.amazonaws/aws-java-sdk-dynamodb &ndash;&gt;-->
+<!--    <dependency>-->
+<!--      <groupId>com.amazonaws</groupId>-->
+<!--      <artifactId>aws-java-sdk-dynamodb</artifactId>-->
+<!--      <version>1.12.435</version>-->
+<!--    </dependency>-->
+    <!-- https://mvnrepository.com/artifact/com.amazonaws/aws-java-sdk -->
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-java-sdk</artifactId>
+      <version>1.12.437</version>
+    </dependency>
+    <!-- https://mvnrepository.com/artifact/com.amazonaws/aws-java-sdk-core -->
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-java-sdk-core</artifactId>
+      <version>1.12.437</version>
+    </dependency>
+
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>dynamodb</artifactId>
+      <version>2.20.26</version>
+    </dependency>
   </dependencies>
   <build>
     <plugins>
